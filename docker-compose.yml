@@ -1,6 +1,4 @@
 # docker-compose.yml
-version: "3.9"
-
 services:
   # ── Kafka Stack ──────────────────────────────────────────
   zookeeper:
@@ -18,8 +16,16 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   # ── Prefect ───────────────────────────────────────────────
   prefect-orion:
@@ -31,17 +37,19 @@ services:
       - prefect_data:/root/.prefect
 
   prefect-worker:
-    image: prefecthq/prefect:2.14.0-python3.10
-    command: >
-      sh -c "prefect work-pool create --type process lab28-worker 2>/dev/null || true
-      && prefect worker start -p lab28-worker -n lab28-worker"
+    build: ./prefect/flows
+    command: python /opt/prefect/flows/kafka_to_delta.py
+    restart: unless-stopped
     environment:
       PREFECT_API_URL: http://prefect-orion:4200/api
     volumes:
       - ./prefect/flows:/opt/prefect/flows
       - ./delta-lake:/opt/delta-lake
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on: [prefect-orion, kafka]
+    depends_on:
+      prefect-orion:
+        condition: service_started
+      kafka:
+        condition: service_healthy
 
   # ── Vector Store (Qdrant) ─────────────────────────────────
   qdrant:
@@ -62,6 +70,7 @@ services:
     image: prom/prometheus:latest
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
     ports:
       - "9090:9090"
 
@@ -72,6 +81,11 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
 
   # ── API Gateway ───────────────────────────────────────────
   api-gateway:
@@ -82,6 +96,14 @@ services:
       VLLM_URL: ${VLLM_NGROK_URL}
       QDRANT_URL: http://qdrant:6333
       REDIS_URL: redis://redis:6379
+      LANGCHAIN_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGCHAIN_PROJECT: ${LANGCHAIN_PROJECT:-lab28-platform}
+      LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-true}
+      LANGSMITH_API_KEY: ${LANGCHAIN_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGCHAIN_PROJECT:-lab28-platform}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-true}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      LANGSMITH_WORKSPACE_ID: ${LANGSMITH_WORKSPACE_ID:-}
     depends_on: [qdrant, redis]
 
 volumes:

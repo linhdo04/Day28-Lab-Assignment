@@ -1,0 +1,19 @@
+groups:
+  - name: api-platform
+    rules:
+      - alert: ApiGatewayDown
+        expr: up{job="api-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: API Gateway is unavailable
+      - alert: ApiGatewayHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="api-gateway",status=~"5.."}[5m]))
+          / clamp_min(sum(rate(http_requests_total{job="api-gateway"}[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: API Gateway error rate is above 5%

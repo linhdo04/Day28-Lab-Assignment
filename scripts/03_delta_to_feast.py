@@ -2,26 +2,30 @@
 import pandas as pd
 import glob, os, redis, json
 
-r = redis.Redis(host="localhost", port=6379, decode_responses=True)
-
 def load_from_delta_and_push_feast():
-    files = glob.glob("delta-lake/raw/*.parquet")
+    delta_path = os.getenv("DELTA_PATH", "delta-lake/raw")
+    files = sorted(glob.glob(f"{delta_path}/*.parquet"))
     if not files:
         print("No data in Delta Lake yet")
-        return
+        return 0
 
     df = pd.concat([pd.read_parquet(f) for f in files])
     print(f"Loaded {len(df)} records from Delta Lake")
 
-    # Push features vào Redis (Feast online store)
-    for _, row in df.iterrows():
-        feature_key = f"feature:{row['id']}"
-        r.set(feature_key, json.dumps({
-            "text": row["text"],
-            "timestamp": row["timestamp"],
-            "processed": True
-        }))
+    r = redis.Redis.from_url(
+        os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True
+    )
+    r.ping()
+    with r.pipeline(transaction=True) as pipe:
+        for _, row in df.drop_duplicates(subset=["id"], keep="last").iterrows():
+            pipe.set(f"feature:{row['id']}", json.dumps({
+                "text": row["text"], "timestamp": row.get("timestamp"), "processed": True
+            }))
+        pipe.execute()
 
-    print(f"Integration 3+4 OK: Delta Lake → Feast (Redis) — {len(df)} features stored")
+    count = df["id"].nunique()
+    print(f"Integration 3+4 OK: Delta Lake → Feast (Redis) — {count} features stored")
+    return count
 
-load_from_delta_and_push_feast()
+if __name__ == "__main__":
+    load_from_delta_and_push_feast()

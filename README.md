@@ -31,6 +31,56 @@ Kaggle (GPU T4/P100):
 
 ## Quick Start
 
+Notebook Kaggle hoàn chỉnh để import trực tiếp:
+[LAB28_Kaggle_GPU_Complete.ipynb](LAB28_Kaggle_GPU_Complete.ipynb).
+
+## Chạy PHẦN 3 — 10 Integration Points
+
+```bash
+# Hạ tầng + Prefect Kafka→Delta chạy nền
+docker compose up -d --build
+
+# 1. Producer → Kafka
+python scripts/01_ingest_to_kafka.py
+
+# Đợi Prefect xử lý Kafka → Delta, rồi 3+4. Delta → Redis feature store
+sleep 20
+python scripts/03_delta_to_feast.py
+
+# 5. Embedding service → Qdrant (cần EMBED_NGROK_URL)
+python scripts/05_embed_to_qdrant.py
+
+# 6+7. MLflow metadata/registry alias → endpoint vLLM
+# Cần MLFLOW_TRACKING_URI và VLLM_NGROK_URL
+python scripts/06_register_vllm_mlflow.py
+
+# 8. Serving → API Gateway (vector phải đúng 384 chiều)
+python -c 'import requests; print(requests.post(
+  "http://localhost:8000/api/v1/chat",
+  json={"query":"What is platform engineering?","embedding":[0.1]*384},
+  timeout=40).json())'
+
+# 9+10. Prometheus và LangSmith (gọi gateway ít nhất một lần trước đó)
+python scripts/09_verify_observability.py
+```
+
+Vector gửi vào gateway phải có cùng số chiều với model embedding. Các biến bắt buộc:
+`VLLM_NGROK_URL`, `EMBED_NGROK_URL`, `LANGCHAIN_API_KEY`; `MLFLOW_TRACKING_URI`
+có thể trỏ tới MLflow local hoặc DagsHub.
+
+## Kiểm tra và demo
+
+```bash
+pytest smoke-tests -v
+python scripts/production_readiness_check.py
+```
+
+- Grafana dashboard: http://localhost:3000/d/lab28-platform
+- Prefect UI: http://localhost:4200
+- Prometheus alerts: http://localhost:9090/alerts
+- Demo runbook: [docs/MILESTONE3_DEMO.md](docs/MILESTONE3_DEMO.md)
+- Câu trả lời nộp bài: [docs/SUBMISSION_ANSWERS.md](docs/SUBMISSION_ANSWERS.md)
+
 ### 1. Khởi động Local Stack
 
 ```bash
